@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:15  # grab the image
+    environment:
+      POSTGRES_DB: chatapp # instantiate the database
+      POSTGRES_USER: chatuser  # create us a user
+      POSTGRES_PASSWORD: devpassword  # create us a pass
+    ports:
+      - "5432:5432"  # gotta have the ports
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # this is a volume that the container will be storing the actual data in
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql # this is the create/init sql script that will do the create logic for our schema
+
+volumes:
+  postgres_data:
