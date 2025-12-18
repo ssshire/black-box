@@ -10,3 +10,10 @@
 1. Run: `cargo run --bin tui`
 2. Expected: `welcome to blackbox...` 
 3. Press any key to exit
+
+
+## To start TCP 
+1. Run: `cargo run --bin tcp`
+2. Expected: `Client/Server connection is created and user can send messages`
+3. Press Ctrl-C to kill server
+
