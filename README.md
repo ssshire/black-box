@@ -6,13 +6,13 @@
 ## Opening PostgreSQL shell inside the container
 1. Run: `docker-compose exec postgres psql -U chatuser -d chatapp`
 
-## To start CLI 
+## To start 
 1. Run: `cargo run --bin tui`
 2. Expected: `welcome to blackbox...` 
-3. Press any key to exit
+3. To Exit: `ctrl + e` 
 
 
-## To start TCP 
+## To start TCP (debugging process)
 1. Run: `cargo run --bin tcp`
 2. Expected: `Client/Server connection is created and user can send messages`
 3. Press Ctrl-C to kill server
