@@ -144,11 +144,12 @@ cargo test
 Expected output:
 
 ```
-running 2 tests
+running 3 tests
 test command_handler::tests::test_parse_create_command ... ok
 test command_handler::tests::test_parse_join_command ... ok
+test command_handler::tests::test_parse_list_command ... ok
 
-test result: ok. 2 passed; 0 failed
+test result: ok. 3 passed; 0 failed
 ```
 
 ---

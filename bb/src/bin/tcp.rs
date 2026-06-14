@@ -119,14 +119,22 @@ async fn handle_client(
                 Command::JoinChannel { ref channel_name } => {
                     let mut map = channels.lock().await;
 
-                    if let Some(old) = &current_channel {
-                        remove_client(&mut map, old, addr);
-                    }
-
-                    if let Some((max_size, subscribers)) = map.get_mut(channel_name) {
-                        if subscribers.len() >= *max_size {
+                    match map.get(channel_name) {
+                        None => {
+                            send_to(&tx, &format!(
+                                "channel '{}' not found. use /list to see available channels or /create to make one.\n",
+                                channel_name
+                            ));
+                        }
+                        Some((max_size, subscribers)) if subscribers.len() >= *max_size => {
                             send_to(&tx, &format!("channel '{}' is full.\n", channel_name));
-                        } else {
+                        }
+                        Some(_) => {
+                            if let Some(old) = current_channel.take() {
+                                remove_client(&mut map, &old, addr);
+                            }
+
+                            let (_, subscribers) = map.get_mut(channel_name).unwrap();
                             subscribers.push((addr, tx.clone()));
                             current_channel = Some(channel_name.clone());
                             send_to(&tx, &format!("joined #{}\n", channel_name));
@@ -136,11 +144,6 @@ async fn handle_client(
                                 Some(addr),
                             );
                         }
-                    } else {
-                        send_to(&tx, &format!(
-                            "channel '{}' not found. use /list to see available channels or /create to make one.\n",
-                            channel_name
-                        ));
                     }
                 }
 

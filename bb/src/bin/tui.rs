@@ -114,6 +114,10 @@ fn handle_input(state: &mut AppState, input: String) {
                         state.push_message(msg);
                     }
                 }
+                Command::ListChannels => {
+                    state.error_message =
+                        Some("channel listing not yet available (local mode).".to_string());
+                }
             }
             let _ = state.command_tx.send(cmd);
         }

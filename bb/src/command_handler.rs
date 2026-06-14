@@ -23,6 +23,9 @@ impl Command {
                 }
                 let name = parts[1].to_string();
                 let size = parts[2].parse::<usize>()?;
+                if size == 0 {
+                    return Err("/create requires a channel size of at least 1.".into());
+                }
                 Ok(Command::CreateChannel { name, size })
             }
             "/join" => {
