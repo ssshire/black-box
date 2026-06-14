@@ -190,7 +190,10 @@ Docker Desktop isn't running. Open it from your Applications folder and wait for
 - TUI renders a main menu, channel view, and help screen
 - Command parser is tested and handles bad input gracefully
 
-## What's next
+## To start TCP (debugging process)
+1. Run: `cargo run --bin tcp`
+2. Expected: `Client/Server connection is created and user can send messages`
+3. Press Ctrl-C to kill server
 
 - Wire the TUI into the TCP server so both use the same connection
 - Write messages to PostgreSQL on send
