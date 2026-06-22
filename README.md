@@ -36,9 +36,19 @@ cargo build
 
 ### Terminal UI
 
+The TUI is a real client of the TCP server — start the server first:
+
+```bash
+cargo run --bin tcp
+```
+
+Then, in a second terminal:
+
 ```bash
 cargo run --bin tui
 ```
+
+If the server isn't running yet, the TUI prints an error and exits rather than opening a blank screen.
 
 You'll see the main menu. Type a command and press Enter.
 
@@ -50,13 +60,13 @@ hello world           ← just type to send a message (no slash needed)
 /quit                 ← exit
 ```
 
-Press `Escape` to go back to the main menu at any time. Press `Ctrl-C` to exit.
+Press `Escape` to leave the current channel and return to the main menu. Press `Ctrl-C` to force-quit immediately.
 
 ---
 
-### TCP server + manual testing
+### TCP server + manual testing (nc)
 
-The TCP server is what you want to test right now — it's the fastest way to verify that messages are actually moving between clients.
+The server only binds to `127.0.0.1` — it's not reachable from the network, just from this machine. `nc` is a quick way to poke at the server directly or simulate a second client without opening the TUI.
 
 **Step 1 — make sure you're in the right directory:**
 
@@ -73,7 +83,7 @@ cargo run --bin tcp
 Wait until you see this before doing anything else:
 
 ```
-blackbox tcp server listening on :8080
+blackbox tcp server listening on 127.0.0.1:8080
 ```
 
 **Step 3 — open a second terminal, go to the same directory, and connect:**
@@ -122,6 +132,8 @@ When you're done, `Ctrl-C` the server. Both clients will drop.
 ```
 /create <name> <size>   create a new channel
 /join <name>            join an existing channel
+/leave                  leave the current channel
+/list                   list available channels (outside a channel only)
 /msg <text>             send a message (or just type without a slash)
 /help                   show this list
 /exit                   disconnect
@@ -176,7 +188,7 @@ SELECT * FROM users;  -- empty for now, auth isn't wired yet
 ## Troubleshooting
 
 **`connection refused` when running `nc localhost 8080`**
-The server isn't running, or you're in the wrong directory. Make sure you ran `cargo run --bin tcp` from inside `bb/` and that it printed `blackbox tcp server listening on :8080` before you tried to connect.
+The server isn't running, or you're in the wrong directory. Make sure you ran `cargo run --bin tcp` from inside `bb/` and that it printed `blackbox tcp server listening on 127.0.0.1:8080` before you tried to connect.
 
 **`cargo: command not found`**
 Rust isn't installed. Run `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh` and follow the prompts.
@@ -188,14 +200,15 @@ Docker Desktop isn't running. Open it from your Applications folder and wait for
 
 ## What works right now
 
-- TCP server accepts multiple clients simultaneously
+- TCP server accepts multiple clients simultaneously, bound to localhost only
 - `/create` and `/join` route clients into named channels
 - Messages broadcast to everyone in the channel in real time
-- TUI renders a main menu, channel view, and help screen
+- TUI is a real client of the TCP server — same connection, same protocol as `nc`
 - Command parser is tested and handles bad input gracefully
 
 ## What's next
 
-- Wire the TUI into the TCP server so both use the same connection
 - Write messages to PostgreSQL on send
 - Add login / registration flow
+- Handle terminal resizing in the channel view — re-clamp scroll position when the viewport grows/shrinks so the scrollback doesn't jump or clip when the window changes size mid-scroll
+

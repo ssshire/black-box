@@ -17,8 +17,8 @@ type ChannelMap = Arc<Mutex<HashMap<String, (usize, Vec<(SocketAddr, ClientTx)>)
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind("0.0.0.0:8080").await?;
-    println!("blackbox tcp server listening on :8080");
+    let listener = TcpListener::bind("127.0.0.1:8080").await?;
+    println!("blackbox tcp server listening on 127.0.0.1:8080");
 
     let channels: ChannelMap = Arc::new(Mutex::new(HashMap::new()));
 
@@ -89,27 +89,31 @@ async fn handle_client(
                 }
 
                 Command::ListChannels => {
-                    let map = channels.lock().await;
-                    if map.is_empty() {
-                        send_to(&tx, "no channels yet. create one with /create <name> <size>\n");
+                    if current_channel.is_some() {
+                        send_to(&tx, "error: /list is only available before you join a channel.\n");
                     } else {
-                        let mut output = String::from("channels:\n");
-                        for (name, (max_size, members)) in map.iter() {
-                            output.push_str(&format!(
-                                "  #{:<20} {}/{} members\n",
-                                name,
-                                members.len(),
-                                max_size
-                            ));
+                        let map = channels.lock().await;
+                        if map.is_empty() {
+                            send_to(&tx, "no channels yet. create one with /create <name> <size>\n");
+                        } else {
+                            let mut output = String::from("channels:\n");
+                            for (name, (max_size, members)) in map.iter() {
+                                output.push_str(&format!(
+                                    "  #{:<20} {}/{} members\n",
+                                    name,
+                                    members.len(),
+                                    max_size
+                                ));
+                            }
+                            send_to(&tx, &output);
                         }
-                        send_to(&tx, &output);
                     }
                 }
 
                 Command::CreateChannel { ref name, size } => {
                     let mut map = channels.lock().await;
                     if map.contains_key(name) {
-                        send_to(&tx, &format!("channel '{}' already exists. use /join.\n", name));
+                        send_to(&tx, &format!("error: channel '{}' already exists. use /join.\n", name));
                     } else {
                         map.insert(name.clone(), (size, Vec::new()));
                         send_to(&tx, &format!("channel '{}' created (max {}). use /join {} to enter.\n", name, size, name));
@@ -122,12 +126,12 @@ async fn handle_client(
                     match map.get(channel_name) {
                         None => {
                             send_to(&tx, &format!(
-                                "channel '{}' not found. use /list to see available channels or /create to make one.\n",
+                                "error: channel '{}' not found. use /list to see available channels or /create to make one.\n",
                                 channel_name
                             ));
                         }
                         Some((max_size, subscribers)) if subscribers.len() >= *max_size => {
-                            send_to(&tx, &format!("channel '{}' is full.\n", channel_name));
+                            send_to(&tx, &format!("error: channel '{}' is full.\n", channel_name));
                         }
                         Some(_) => {
                             if let Some(old) = current_channel.take() {
@@ -147,16 +151,29 @@ async fn handle_client(
                     }
                 }
 
+                Command::LeaveChannel => {
+                    if let Some(ch) = current_channel.take() {
+                        let mut map = channels.lock().await;
+                        remove_client(&mut map, &ch, addr);
+                        if let Some((_, subscribers)) = map.get_mut(&ch) {
+                            broadcast(subscribers, &format!("*** {} left #{}\n", user_id, ch), None);
+                        }
+                        send_to(&tx, &format!("left #{}\n", ch));
+                    } else {
+                        send_to(&tx, "error: you are not in a channel.\n");
+                    }
+                }
+
                 Command::SendMessage { ref content } => {
                     if let Some(ch) = &current_channel {
-                        let outgoing = format!("[{}] {}: {}\n", ch, user_id, content);
+                        let outgoing = format!("{}: {}\n", user_id, content);
                         let mut map = channels.lock().await;
                         if let Some((_, subscribers)) = map.get_mut(ch) {
                             broadcast(subscribers, &outgoing, Some(addr));
                         }
-                        send_to(&tx, &format!("[{}] you: {}\n", ch, content));
+                        send_to(&tx, &format!("you: {}\n", content));
                     } else {
-                        send_to(&tx, "you are not in a channel. use /list to see channels or /create to make one.\n");
+                        send_to(&tx, "error: you are not in a channel. use /list to see channels or /create to make one.\n");
                     }
                 }
             },
