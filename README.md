@@ -21,13 +21,10 @@ cd blackbox
 # 2. the project lives inside the bb/ folder — run everything from here
 cd bb
 
-# 3. rename the SQL file so Docker picks it up
-mv black-box.sql init.sql
-
-# 4. start the database
+# 3. start the database
 docker-compose up -d
 
-# 5. build
+# 4. build
 cargo build
 ```
 
@@ -156,7 +153,13 @@ test result: ok. 3 passed; 0 failed
 
 ## Database (PostgreSQL)
 
-The database runs in Docker. To open a shell and look around:
+The database runs in Docker. To verify everything is set up correctly (Docker is running, Postgres is healthy, and `init.sql` created the expected tables), run:
+
+```bash
+./scripts/check-db.sh
+```
+
+To open a shell and look around:
 
 ```bash
 docker-compose exec postgres psql -U chatuser -d chatapp
