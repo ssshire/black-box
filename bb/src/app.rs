@@ -52,12 +52,14 @@ impl AppState {
             // Drop pre-join lobby chatter (welcome text, /list, /create
             // confirmations) — the channel view starts fresh from here.
             self.server_log.clear();
+            self.scroll_offset = 0;
         }
 
         if line.starts_with("left #") {
             self.current_channel = None;
             self.current_screen = AppScreen::MainMenu;
             self.server_log.clear();
+            self.scroll_offset = 0;
         }
 
         if let Some(msg) = line.strip_prefix("error: ") {

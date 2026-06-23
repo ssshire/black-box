@@ -239,7 +239,7 @@ fn render_channel(frame: &mut ratatui::Frame, state: &AppState) {
     let items: Vec<ListItem> = state.server_log[start..end]
         .iter()
         .map(|line| {
-            let color = if line.contains(&format!("{}:", state.user_id)) {
+            let color = if line.starts_with("you: ") || line.contains(&format!("{}:", state.user_id)) {
                 Color::Cyan
             } else if line.starts_with("***") {
                 Color::DarkGray
