@@ -1,8 +1,9 @@
 /// TUI binary — `cargo run --bin tui`
-use std::sync::mpsc::{channel, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 
-use bb::app::{AppScreen, AppState, Message};
+use bb::app::{AppScreen, AppState};
 use bb::command_handler::Command;
+use bb::net::{self, ServerEvent};
 
 use ratatui::{
     backend::TermwizBackend,
@@ -15,9 +16,18 @@ use ratatui::{
 use termwiz::input::{InputEvent, KeyCode, Modifiers};
 use termwiz::terminal::Terminal as TermwizTerminal;
 
+const SERVER_ADDR: &str = "127.0.0.1:8080";
+
 fn main() {
-    let (cmd_tx, cmd_rx) = channel::<Command>();
-    let mut state = AppState::new(cmd_tx);
+    let server = match net::connect(SERVER_ADDR) {
+        Ok(conn) => conn,
+        Err(e) => {
+            eprintln!("failed to connect to blackbox server at {}: {}", SERVER_ADDR, e);
+            eprintln!("make sure `cargo run --bin tcp` is running first.");
+            std::process::exit(1);
+        }
+    };
+    let mut state = AppState::new(server);
 
     let backend = TermwizBackend::new().expect("failed to create termwiz backend");
     let mut terminal = Terminal::new(backend).expect("failed to create terminal");
@@ -53,17 +63,44 @@ fn main() {
                     handle_input(&mut state, input);
                 }
                 KeyCode::Escape => {
-                    state.current_screen = AppScreen::MainMenu;
                     state.error_message = None;
+                    if state.current_screen == AppScreen::InChannel {
+                        // Actually leave server-side — the screen only
+                        // switches back once "left #..." is confirmed
+                        // (see AppState::push_server_line).
+                        if let Err(e) = state.server.send_line("/leave") {
+                            state.error_message = Some(format!("lost connection to server: {}", e));
+                            state.running = false;
+                        }
+                    } else {
+                        state.current_screen = AppScreen::MainMenu;
+                    }
+                }
+                KeyCode::UpArrow if state.current_screen == AppScreen::InChannel => {
+                    state.scroll_offset = state.scroll_offset.saturating_add(1);
+                }
+                KeyCode::DownArrow if state.current_screen == AppScreen::InChannel => {
+                    state.scroll_offset = state.scroll_offset.saturating_sub(1);
+                }
+                KeyCode::PageUp if state.current_screen == AppScreen::InChannel => {
+                    state.scroll_offset = state.scroll_offset.saturating_add(10);
+                }
+                KeyCode::PageDown if state.current_screen == AppScreen::InChannel => {
+                    state.scroll_offset = state.scroll_offset.saturating_sub(10);
                 }
                 _ => {}
             }
         }
 
-        match cmd_rx.try_recv() {
-            Ok(_) | Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                state.running = false;
+        loop {
+            match state.server.events.try_recv() {
+                Ok(ServerEvent::Line(line)) => state.push_server_line(line),
+                Ok(ServerEvent::Disconnected) | Err(TryRecvError::Disconnected) => {
+                    state.error_message = Some("disconnected from server.".to_string());
+                    state.running = false;
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
             }
         }
     }
@@ -75,55 +112,27 @@ fn handle_input(state: &mut AppState, input: String) {
         return;
     }
 
-    if state.current_screen == AppScreen::InChannel && !trimmed.starts_with('/') {
-        let channel = state
-            .current_channel
-            .clone()
-            .unwrap_or_else(|| "general".to_string());
-        let msg = Message::new(&state.user_id, &trimmed, &channel);
-        state.push_message(msg);
-        let _ = state.command_tx.send(Command::SendMessage { content: trimmed });
-        return;
+    state.error_message = None;
+    state.scroll_offset = 0;
+
+    // Plain text (no leading slash) is a chat message, not a local command —
+    // forward it as-is and let the server validate (it auto-prefixes with
+    // /msg when the client is in a channel). Local parsing only drives the
+    // Help screen and quitting — channel membership is decided by the
+    // server's response (see AppState::push_server_line), not guessed here,
+    // so a failed /join can't strand the UI on a channel that never joined.
+    if trimmed.starts_with('/') {
+        match Command::parse(&trimmed) {
+            Ok(Command::Help) => state.current_screen = AppScreen::Help,
+            Ok(Command::Exit) => state.running = false,
+            Ok(_) => {}
+            Err(e) => state.error_message = Some(e.to_string()),
+        }
     }
 
-    match Command::parse(&trimmed) {
-        Ok(cmd) => {
-            state.error_message = None;
-            match &cmd {
-                Command::CreateChannel { name, size: _ } => {
-                    state.current_channel = Some(name.clone());
-                    state.current_screen = AppScreen::InChannel;
-                    let sys = Message::new("system", &format!("Channel '{}' created.", name), name);
-                    state.push_message(sys);
-                }
-                Command::JoinChannel { channel_name } => {
-                    state.current_channel = Some(channel_name.clone());
-                    state.current_screen = AppScreen::InChannel;
-                    let sys = Message::new("system", &format!("Joined '{}'.", channel_name), channel_name);
-                    state.push_message(sys);
-                }
-                Command::Help => {
-                    state.current_screen = AppScreen::Help;
-                }
-                Command::Exit => {
-                    state.running = false;
-                }
-                Command::SendMessage { content } => {
-                    if let Some(ch) = state.current_channel.clone() {
-                        let msg = Message::new(&state.user_id, content, &ch);
-                        state.push_message(msg);
-                    }
-                }
-                Command::ListChannels => {
-                    state.error_message =
-                        Some("channel listing not yet available (local mode).".to_string());
-                }
-            }
-            let _ = state.command_tx.send(cmd);
-        }
-        Err(e) => {
-            state.error_message = Some(e.to_string());
-        }
+    if let Err(e) = state.server.send_line(&trimmed) {
+        state.error_message = Some(format!("lost connection to server: {}", e));
+        state.running = false;
     }
 }
 
@@ -181,6 +190,12 @@ fn render_main_menu(frame: &mut ratatui::Frame, state: &AppState) {
             Style::default().fg(Color::Red),
         ));
         frame.render_widget(err_widget, chunks[2]);
+    } else if let Some(last) = state.server_log.last() {
+        let info_widget = Paragraph::new(Span::styled(
+            format!("  {}", last),
+            Style::default().fg(Color::DarkGray),
+        ));
+        frame.render_widget(info_widget, chunks[2]);
     }
 }
 
@@ -198,40 +213,49 @@ fn render_channel(frame: &mut ratatui::Frame, state: &AppState) {
         ])
         .split(area);
 
+    let scroll_hint = if state.scroll_offset > 0 {
+        "  |  ↓ PgDn: back to live"
+    } else {
+        ""
+    };
     let status = Paragraph::new(Span::styled(
-        format!("  #{} — {}  |  Esc: menu  Ctrl-C: quit", channel_name, state.user_id),
+        format!(
+            "  #{} — {}  |  Esc: leave  Ctrl-C: quit  |  ↑↓ PgUp/PgDn: scroll{}",
+            channel_name, state.user_id, scroll_hint
+        ),
         Style::default().fg(Color::DarkGray),
     ));
     frame.render_widget(status, chunks[0]);
 
-    let items: Vec<ListItem> = state
-        .messages
+    // Tail the log to whatever fits in the visible area, clamped by scroll_offset
+    // so 0 always tracks the live bottom and scrolling back never reads out of bounds.
+    let view_height = chunks[1].height.saturating_sub(2) as usize;
+    let total = state.server_log.len();
+    let max_offset = total.saturating_sub(view_height);
+    let offset = state.scroll_offset.min(max_offset);
+    let end = total - offset;
+    let start = end.saturating_sub(view_height);
+
+    let items: Vec<ListItem> = state.server_log[start..end]
         .iter()
-        .filter(|m| state.current_channel.as_deref() == Some(m.channel.as_str()))
-        .map(|m| {
-            let color = if m.user_id == "system" {
-                Color::DarkGray
-            } else if m.user_id == state.user_id {
+        .map(|line| {
+            let color = if line.starts_with("you: ") || line.contains(&format!("{}:", state.user_id)) {
                 Color::Cyan
+            } else if line.starts_with("***") {
+                Color::DarkGray
             } else {
                 Color::White
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(
-                    format!("[{}] ", m.timestamp),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("{}: ", m.user_id),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(m.content.clone()),
-            ]))
+            ListItem::new(Line::from(Span::styled(line.clone(), Style::default().fg(color))))
         })
         .collect();
 
-    let messages = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(format!(" #{} ", channel_name)));
+    let title = if offset > 0 {
+        format!(" #{} (scrolled back {}) ", channel_name, offset)
+    } else {
+        format!(" #{} ", channel_name)
+    };
+    let messages = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
     frame.render_widget(messages, chunks[1]);
 
     let input = Paragraph::new(format!("> {}", state.input_buffer))

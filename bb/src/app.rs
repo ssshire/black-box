@@ -1,26 +1,4 @@
-use std::sync::mpsc::Sender;
-use chrono::Local;
-
-use crate::command_handler::Command;
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Message {
-    pub user_id: String,
-    pub content: String,
-    pub timestamp: String,
-    pub channel: String,
-}
-
-impl Message {
-    pub fn new(user_id: &str, content: &str, channel: &str) -> Self {
-        Self {
-            user_id: user_id.to_string(),
-            content: content.to_string(),
-            timestamp: Local::now().format("%H:%M:%S").to_string(),
-            channel: channel.to_string(),
-        }
-    }
-}
+use crate::net::ServerConnection;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppScreen {
@@ -35,32 +13,64 @@ pub struct AppState {
     pub current_channel: Option<String>,
     pub user_id: String,
     pub input_buffer: String,
-    pub messages: Vec<Message>,
+    pub server_log: Vec<String>,
+    /// Lines scrolled back from the bottom of `server_log`. 0 means "follow live".
+    pub scroll_offset: usize,
     pub error_message: Option<String>,
-    pub command_tx: Sender<Command>,
+    pub server: ServerConnection,
     pub running: bool,
 }
 
 impl AppState {
-    pub fn new(command_tx: Sender<Command>) -> Self {
+    pub fn new(server: ServerConnection) -> Self {
         Self {
             current_screen: AppScreen::MainMenu,
             current_channel: None,
             user_id: Self::generate_user_id(),
             input_buffer: String::new(),
-            messages: Vec::new(),
+            server_log: Vec::new(),
+            scroll_offset: 0,
             error_message: None,
-            command_tx,
+            server,
             running: true,
         }
     }
 
-    /// Push a message into local state for display.
-    pub fn push_message(&mut self, msg: Message) {
-        self.messages.push(msg);
-        // Keep the last 200 messages in memory.
-        if self.messages.len() > 200 {
-            self.messages.remove(0);
+    /// Push a line received from the server into the scrollback for display.
+    ///
+    /// Channel membership is server-authoritative: a `/join` only actually
+    /// switches the screen once the server confirms it with "joined #name",
+    /// rather than assuming success the moment the command is sent.
+    ///
+    /// Lines prefixed "error: " are rejections (channel not found, full,
+    /// etc.) — shown as a transient error like local parse failures, not
+    /// kept in the permanent chat scrollback.
+    pub fn push_server_line(&mut self, line: String) {
+        if let Some(name) = line.strip_prefix("joined #") {
+            self.current_channel = Some(name.trim().to_string());
+            self.current_screen = AppScreen::InChannel;
+            // Drop pre-join lobby chatter (welcome text, /list, /create
+            // confirmations) — the channel view starts fresh from here.
+            self.server_log.clear();
+            self.scroll_offset = 0;
+        }
+
+        if line.starts_with("left #") {
+            self.current_channel = None;
+            self.current_screen = AppScreen::MainMenu;
+            self.server_log.clear();
+            self.scroll_offset = 0;
+        }
+
+        if let Some(msg) = line.strip_prefix("error: ") {
+            self.error_message = Some(msg.to_string());
+            return;
+        }
+
+        self.server_log.push(line);
+        // Keep the last 200 lines in memory.
+        if self.server_log.len() > 200 {
+            self.server_log.remove(0);
         }
     }
 

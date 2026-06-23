@@ -2,6 +2,7 @@
 pub enum Command {
     CreateChannel { name: String, size: usize },
     JoinChannel { channel_name: String },
+    LeaveChannel,
     SendMessage { content: String },
     ListChannels,
     Exit,
@@ -42,6 +43,7 @@ impl Command {
                 let content = parts[1..].join(" ");
                 Ok(Command::SendMessage { content })
             }
+            "/leave" => Ok(Command::LeaveChannel),
             "/list" | "/channels" => Ok(Command::ListChannels),
             "/exit" | "/quit" => Ok(Command::Exit),
             "/help" => Ok(Command::Help),
@@ -54,6 +56,7 @@ impl Command {
     Available Commands:
         /create <name> <size>  - Create a new channel
         /join <channel>        - Join an existing channel
+        /leave                 - Leave the current channel
         /list                  - Show all available channels
         /msg <message>         - Send a message (or just type without /)
         /help                  - Show this help message
@@ -88,6 +91,12 @@ mod tests {
             }
             _ => panic!("Wrong command type"),
         }
+    }
+
+    #[test]
+    fn test_parse_leave_command() {
+        let cmd = Command::parse("/leave").unwrap();
+        assert!(matches!(cmd, Command::LeaveChannel));
     }
 
     #[test]
