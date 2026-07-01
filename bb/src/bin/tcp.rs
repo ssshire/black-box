@@ -25,10 +25,10 @@ type ChannelMap = Arc<Mutex<HashMap<String, ChannelState>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let pool = db::connect().await?;
+
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
     println!("blackbox tcp server listening on 127.0.0.1:8080");
-
-    let pool = db::connect().await?;
     let channels: ChannelMap = Arc::new(Mutex::new(HashMap::new()));
 
     loop {

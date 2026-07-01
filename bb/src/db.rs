@@ -10,7 +10,10 @@ const DEFAULT_DATABASE_URL: &str = "postgres://chatuser:devpassword@localhost:54
 
 pub async fn connect() -> Result<PgPool, sqlx::Error> {
     let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-    PgPoolOptions::new().connect(&url).await
+    PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect(&url)
+        .await
 }
 
 #[derive(Debug, Clone)]
