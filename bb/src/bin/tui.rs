@@ -1,7 +1,7 @@
 /// TUI binary — `cargo run --bin tui`
 use std::sync::mpsc::TryRecvError;
 
-use bb::app::{AppScreen, AppState};
+use bb::app::{AppScreen, AppState, AuthField};
 use bb::command_handler::Command;
 use bb::net::{self, ServerEvent};
 
@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
-use termwiz::input::{InputEvent, KeyCode, Modifiers};
+use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
 use termwiz::terminal::Terminal as TermwizTerminal;
 
 const SERVER_ADDR: &str = "127.0.0.1:8080";
@@ -33,6 +33,12 @@ fn main() {
     let mut terminal = Terminal::new(backend).expect("failed to create terminal");
 
     while state.running {
+        // termwiz's BufferedTerminal only learns about a terminal resize when
+        // explicitly told to check — SIGWINCH is out-of-band on Unix, so the
+        // surface (and therefore frame.area()) would otherwise stay frozen
+        // at the size the app launched with.
+        let _ = terminal.backend_mut().buffered_terminal_mut().check_for_resize();
+
         terminal
             .draw(|frame| render(frame, &state))
             .expect("draw failed");
@@ -50,45 +56,49 @@ fn main() {
                 break;
             }
 
-            match key.key {
-                KeyCode::Char(c) => {
-                    state.error_message = None;
-                    state.input_buffer.push(c);
-                }
-                KeyCode::Backspace => {
-                    state.input_buffer.pop();
-                }
-                KeyCode::Enter => {
-                    let input = state.take_input();
-                    handle_input(&mut state, input);
-                }
-                KeyCode::Escape => {
-                    state.error_message = None;
-                    if state.current_screen == AppScreen::InChannel {
-                        // Actually leave server-side — the screen only
-                        // switches back once "left #..." is confirmed
-                        // (see AppState::push_server_line).
-                        if let Err(e) = state.server.send_line("/leave") {
-                            state.error_message = Some(format!("lost connection to server: {}", e));
-                            state.running = false;
-                        }
-                    } else {
-                        state.current_screen = AppScreen::MainMenu;
+            if matches!(state.current_screen, AppScreen::Login | AppScreen::Register) {
+                handle_auth_key(&mut state, key);
+            } else {
+                match key.key {
+                    KeyCode::Char(c) => {
+                        state.error_message = None;
+                        state.input_buffer.push(c);
                     }
+                    KeyCode::Backspace => {
+                        state.input_buffer.pop();
+                    }
+                    KeyCode::Enter => {
+                        let input = state.take_input();
+                        handle_input(&mut state, input);
+                    }
+                    KeyCode::Escape => {
+                        state.error_message = None;
+                        if state.current_screen == AppScreen::InChannel {
+                            // Actually leave server-side — the screen only
+                            // switches back once "left #..." is confirmed
+                            // (see AppState::push_server_line).
+                            if let Err(e) = state.server.send_line("/leave") {
+                                state.error_message = Some(format!("lost connection to server: {}", e));
+                                state.running = false;
+                            }
+                        } else {
+                            state.current_screen = AppScreen::MainMenu;
+                        }
+                    }
+                    KeyCode::UpArrow if state.current_screen == AppScreen::InChannel => {
+                        state.scroll_offset = state.scroll_offset.saturating_add(1);
+                    }
+                    KeyCode::DownArrow if state.current_screen == AppScreen::InChannel => {
+                        state.scroll_offset = state.scroll_offset.saturating_sub(1);
+                    }
+                    KeyCode::PageUp if state.current_screen == AppScreen::InChannel => {
+                        state.scroll_offset = state.scroll_offset.saturating_add(10);
+                    }
+                    KeyCode::PageDown if state.current_screen == AppScreen::InChannel => {
+                        state.scroll_offset = state.scroll_offset.saturating_sub(10);
+                    }
+                    _ => {}
                 }
-                KeyCode::UpArrow if state.current_screen == AppScreen::InChannel => {
-                    state.scroll_offset = state.scroll_offset.saturating_add(1);
-                }
-                KeyCode::DownArrow if state.current_screen == AppScreen::InChannel => {
-                    state.scroll_offset = state.scroll_offset.saturating_sub(1);
-                }
-                KeyCode::PageUp if state.current_screen == AppScreen::InChannel => {
-                    state.scroll_offset = state.scroll_offset.saturating_add(10);
-                }
-                KeyCode::PageDown if state.current_screen == AppScreen::InChannel => {
-                    state.scroll_offset = state.scroll_offset.saturating_sub(10);
-                }
-                _ => {}
             }
         }
 
@@ -136,11 +146,113 @@ fn handle_input(state: &mut AppState, input: String) {
     }
 }
 
+/// Routes key input to whichever auth field is focused, cycles fields with
+/// Tab, toggles between Login/Register with Ctrl-R, and submits on Enter.
+fn handle_auth_key(state: &mut AppState, key: KeyEvent) {
+    if key.key == KeyCode::Char('r') && key.modifiers == Modifiers::CTRL {
+        state.current_screen = match state.current_screen {
+            AppScreen::Register => AppScreen::Login,
+            _ => AppScreen::Register,
+        };
+        state.error_message = None;
+        return;
+    }
+
+    match key.key {
+        KeyCode::Char(c) => {
+            state.error_message = None;
+            state.auth_field_mut().push(c);
+        }
+        KeyCode::Backspace => {
+            state.auth_field_mut().pop();
+        }
+        KeyCode::Tab => state.next_auth_field(),
+        KeyCode::Enter => {
+            let missing_email = state.current_screen == AppScreen::Register && state.auth_email.is_empty();
+            if state.auth_username.is_empty() || state.auth_password.is_empty() || missing_email {
+                state.error_message = Some("all fields are required.".to_string());
+                return;
+            }
+            let cmd = state.build_auth_command();
+            if let Err(e) = state.server.send_line(&cmd) {
+                state.error_message = Some(format!("lost connection to server: {}", e));
+                state.running = false;
+            }
+        }
+        _ => {}
+    }
+}
+
 fn render(frame: &mut ratatui::Frame, state: &AppState) {
     match state.current_screen {
+        AppScreen::Login | AppScreen::Register => render_auth(frame, state),
         AppScreen::MainMenu | AppScreen::CreateChannel => render_main_menu(frame, state),
         AppScreen::InChannel => render_channel(frame, state),
         AppScreen::Help => render_help(frame, state),
+    }
+}
+
+fn render_auth(frame: &mut ratatui::Frame, state: &AppState) {
+    let area = frame.area();
+    let is_register = state.current_screen == AppScreen::Register;
+
+    let mut constraints = vec![Constraint::Length(3)];
+    if is_register {
+        constraints.push(Constraint::Length(3));
+    }
+    constraints.push(Constraint::Length(3));
+    constraints.push(Constraint::Length(1));
+    constraints.push(Constraint::Min(1));
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area);
+
+    let field_style = |field: AuthField| {
+        if state.auth_field == field {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Gray)
+        }
+    };
+
+    let username = Paragraph::new(format!("> {}", state.auth_username))
+        .block(Block::default().borders(Borders::ALL).title(" username "))
+        .style(field_style(AuthField::Username));
+    frame.render_widget(username, chunks[0]);
+
+    let mut idx = 1;
+    if is_register {
+        let email = Paragraph::new(format!("> {}", state.auth_email))
+            .block(Block::default().borders(Borders::ALL).title(" email "))
+            .style(field_style(AuthField::Email));
+        frame.render_widget(email, chunks[idx]);
+        idx += 1;
+    }
+
+    let masked_password: String = state.auth_password.chars().map(|_| '*').collect();
+    let password = Paragraph::new(format!("> {}", masked_password))
+        .block(Block::default().borders(Borders::ALL).title(" password "))
+        .style(field_style(AuthField::Password));
+    frame.render_widget(password, chunks[idx]);
+    idx += 1;
+
+    let hint = if is_register {
+        "Tab: next field  Enter: register  Ctrl-R: back to login  Ctrl-C: quit"
+    } else {
+        "Tab: next field  Enter: log in  Ctrl-R: register instead  Ctrl-C: quit"
+    };
+    let hint_widget = Paragraph::new(Span::styled(format!("  {}", hint), Style::default().fg(Color::DarkGray)));
+    frame.render_widget(hint_widget, chunks[idx]);
+    idx += 1;
+
+    if let Some(err) = &state.error_message {
+        let err_widget = Paragraph::new(Span::styled(
+            format!("  ✗ {}", err),
+            Style::default().fg(Color::Red),
+        ));
+        frame.render_widget(err_widget, chunks[idx]);
     }
 }
 
@@ -221,7 +333,7 @@ fn render_channel(frame: &mut ratatui::Frame, state: &AppState) {
     let status = Paragraph::new(Span::styled(
         format!(
             "  #{} — {}  |  Esc: leave  Ctrl-C: quit  |  ↑↓ PgUp/PgDn: scroll{}",
-            channel_name, state.user_id, scroll_hint
+            channel_name, state.display_name, scroll_hint
         ),
         Style::default().fg(Color::DarkGray),
     ));
@@ -239,7 +351,7 @@ fn render_channel(frame: &mut ratatui::Frame, state: &AppState) {
     let items: Vec<ListItem> = state.server_log[start..end]
         .iter()
         .map(|line| {
-            let color = if line.starts_with("you: ") || line.contains(&format!("{}:", state.user_id)) {
+            let color = if line.starts_with("you: ") || line.contains(&format!("{}:", state.display_name)) {
                 Color::Cyan
             } else if line.starts_with("***") {
                 Color::DarkGray

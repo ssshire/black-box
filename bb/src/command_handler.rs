@@ -7,6 +7,8 @@ pub enum Command {
     ListChannels,
     Exit,
     Help,
+    Register { username: String, email: String, password: String },
+    Login { username: String, password: String },
 }
 
 impl Command {
@@ -43,6 +45,25 @@ impl Command {
                 let content = parts[1..].join(" ");
                 Ok(Command::SendMessage { content })
             }
+            "/register" => {
+                if parts.len() < 4 {
+                    return Err("/register requires: username, email, and password. Usage: /register <username> <email> <password>".into());
+                }
+                Ok(Command::Register {
+                    username: parts[1].to_string(),
+                    email: parts[2].to_string(),
+                    password: parts[3].to_string(),
+                })
+            }
+            "/login" => {
+                if parts.len() < 3 {
+                    return Err("/login requires: username and password. Usage: /login <username> <password>".into());
+                }
+                Ok(Command::Login {
+                    username: parts[1].to_string(),
+                    password: parts[2].to_string(),
+                })
+            }
             "/leave" => Ok(Command::LeaveChannel),
             "/list" | "/channels" => Ok(Command::ListChannels),
             "/exit" | "/quit" => Ok(Command::Exit),
@@ -54,6 +75,8 @@ impl Command {
     pub fn help_text() -> &'static str {
         r#"
     Available Commands:
+        /register <user> <email> <pass> - Register a new account
+        /login <user> <pass>   - Log in to an existing account
         /create <name> <size>  - Create a new channel
         /join <channel>        - Join an existing channel
         /leave                 - Leave the current channel
@@ -106,5 +129,30 @@ mod tests {
 
         let cmd2 = Command::parse("/channels").unwrap();
         assert!(matches!(cmd2, Command::ListChannels));
+    }
+
+    #[test]
+    fn test_parse_register_command() {
+        let cmd = Command::parse("/register alice alice@example.com secret123").unwrap();
+        match cmd {
+            Command::Register { username, email, password } => {
+                assert_eq!(username, "alice");
+                assert_eq!(email, "alice@example.com");
+                assert_eq!(password, "secret123");
+            }
+            _ => panic!("Wrong command type"),
+        }
+    }
+
+    #[test]
+    fn test_parse_login_command() {
+        let cmd = Command::parse("/login alice secret123").unwrap();
+        match cmd {
+            Command::Login { username, password } => {
+                assert_eq!(username, "alice");
+                assert_eq!(password, "secret123");
+            }
+            _ => panic!("Wrong command type"),
+        }
     }
 }
